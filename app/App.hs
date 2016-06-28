@@ -11,6 +11,7 @@ import qualified Data.Bifunctor as B
 import Control.Monad.Reader
 import Control.Monad.Except
 import Data.Maybe (isJust)
+import Data.Bool (bool)
 import Unused.Grouping (CurrentGrouping(..), groupedResponses)
 import Unused.Types (TermMatchSet, RemovalLikelihood(..))
 import Unused.TermSearch (SearchResults(..), fromResults)
@@ -92,16 +93,15 @@ loadAllConfigs = do
 
 calculateTagInput :: App [String]
 calculateTagInput = do
-    tags <- liftIO . fmap (B.first TagError) . loadTags =<< readFromStdIn
+    tags <- liftIO .
+            fmap (B.first TagError) .
+            bool loadTagsFromFile loadTagsFromPipe =<< readFromStdIn
     either throwError return tags
-  where
-    loadTags b = if b then loadTagsFromPipe else loadTagsFromFile
 
 withCache :: IO SearchResults -> App SearchResults
 withCache f =
-    operateCache =<< runWithCache
+    bool (liftIO f) (withCache' f) =<< runWithCache
   where
-    operateCache b = if b then withCache' f else liftIO f
     withCache' :: IO SearchResults -> App SearchResults
     withCache' r =
         either (throwError . CacheError) (return . SearchResults) =<<
@@ -118,11 +118,8 @@ optionFilters tms = foldl (>>=) (pure tms) matchSetFilters
         ]
 
 singleOccurrenceFilter :: AppConfig m => TermMatchSet -> m TermMatchSet
-singleOccurrenceFilter tms = do
-    allowsSingleOccurrence <- asks oSingleOccurrenceMatches
-    return $ if allowsSingleOccurrence
-        then withOneOccurrence tms
-        else tms
+singleOccurrenceFilter tms =
+    bool tms (withOneOccurrence tms) <$> asks oSingleOccurrenceMatches
 
 likelihoodsFilter :: AppConfig m => TermMatchSet -> m TermMatchSet
 likelihoodsFilter tms =
@@ -152,8 +149,4 @@ numberOfCommits :: AppConfig m => m (Maybe Int)
 numberOfCommits = asks oCommitCount
 
 resultFormatter :: AppConfig m => m V.ResultsFormat
-resultFormatter = do
-    c <- numberOfCommits
-    return $ if isJust c
-        then V.List
-        else V.Column
+resultFormatter = bool V.Column V.List . isJust <$> numberOfCommits
